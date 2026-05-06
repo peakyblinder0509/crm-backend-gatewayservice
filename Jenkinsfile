@@ -2,128 +2,89 @@ pipeline {
     agent any
 
     environment {
-        // SonarQube
-        SONAR_PROJECT_KEY = "crm-backend-gateway"
-
-        // AWS ECR
-        AWS_REGION        = "ap-south-1"
-        AWS_ACCOUNT_ID    = "<YOUR_AWS_ACCOUNT_ID>"
-        ECR_REPO_NAME     = "crm-backend-gateway"
-        IMAGE_TAG         = "${BUILD_NUMBER}"
-
-        ECR_REGISTRY      = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-        FULL_IMAGE        = "${ECR_REGISTRY}/${ECR_REPO_NAME}:${IMAGE_TAG}"
-        LATEST_IMAGE      = "${ECR_REGISTRY}/${ECR_REPO_NAME}:latest"
+        APP_NAME       = 'crm-backend-gatewayservice'
+        AWS_REGION     = 'eu-north-1'
+        AWS_ACCOUNT_ID = '841162684034'
+        ECR_REGISTRY   = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+        IMAGE_TAG      = "${env.BUILD_NUMBER}"
+        FULL_IMAGE     = "${ECR_REGISTRY}/${APP_NAME}:${IMAGE_TAG}"
     }
 
     stages {
 
-        // ──────────────────────────────────────
-        // STAGE 1: Checkout
-        // ──────────────────────────────────────
-        stage('1. Checkout') {
+        stage('Clone Backend Code') {
             steps {
-                git branch: 'main',
-                    url: 'https://github.com/<your-org>/crm-backend-gateway.git',
-                    credentialsId: 'github-creds'
-                echo "✅ Source code checked out"
+                git branch: 'main', url: 'https://github.com/peakyblinder0509/crm-backend-gatewayservice.git'
             }
         }
 
-        // ──────────────────────────────────────
-        // STAGE 2: SonarQube Analysis
-        // ──────────────────────────────────────
-        stage('2. SonarQube Analysis') {
+        stage('SonarQube Analysis') {
             steps {
                 withSonarQubeEnv('SonarQube') {
-                    sh """
-                        sonar-scanner \
-                          -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
-                          -Dsonar.projectName=${SONAR_PROJECT_KEY} \
+                    sh "${tool 'SonarScanner'}/bin/sonar-scanner \
+                          -Dsonar.projectKey= crm-backend-gatewayservice'\
+                          -Dsonar.projectName='crm-backend-gatewayservice' \
                           -Dsonar.sources=. \
-                          -Dsonar.exclusions=**/node_modules/**,**/dist/**,**/.git/**
-                    """
+                          -Dsonar.exclusions=node_modules/**,**/*.test.js"
                 }
-                echo "✅ SonarQube analysis completed"
             }
         }
 
-        // ──────────────────────────────────────
-        // STAGE 3: Quality Gate
-        // ──────────────────────────────────────
-        stage('3. Quality Gate') {
+        stage('Quality Gate') {
             steps {
                 timeout(time: 5, unit: 'MINUTES') {
                     waitForQualityGate abortPipeline: true
                 }
-                echo "✅ Quality Gate passed"
             }
         }
 
-        // ──────────────────────────────────────
-        // STAGE 4: Image Build
-        // ──────────────────────────────────────
-        stage('4. Image Build') {
+        stage('Build Docker Image') {
             steps {
-                sh "docker build -t ${ECR_REPO_NAME}:${IMAGE_TAG} ."
-                echo "✅ Docker image built: ${ECR_REPO_NAME}:${IMAGE_TAG}"
+                sh "docker build -t ${FULL_IMAGE} ."
             }
         }
 
-        // ──────────────────────────────────────
-        // STAGE 5: Tag Image
-        // ──────────────────────────────────────
-        stage('5. Tag Image') {
+        stage('Push to AWS ECR') {
             steps {
-                sh """
-                    docker tag ${ECR_REPO_NAME}:${IMAGE_TAG} ${FULL_IMAGE}
-                    docker tag ${ECR_REPO_NAME}:${IMAGE_TAG} ${LATEST_IMAGE}
-                """
-                echo "✅ Tagged → ${FULL_IMAGE}"
-                echo "✅ Tagged → ${LATEST_IMAGE}"
-            }
-        }
-
-        // ──────────────────────────────────────
-        // STAGE 6: Push Image to ECR
-        // ──────────────────────────────────────
-        stage('6. Push Image to ECR') {
-            steps {
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding',
-                                  credentialsId: 'aws-ecr-creds']]) {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds'
+                ]]) {
                     sh """
                         aws ecr get-login-password --region ${AWS_REGION} \
-                          | docker login --username AWS --password-stdin ${ECR_REGISTRY}
+                        | docker login \
+                            --username AWS \
+                            --password-stdin ${ECR_REGISTRY}
 
                         docker push ${FULL_IMAGE}
-                        docker push ${LATEST_IMAGE}
+
+                        docker tag ${FULL_IMAGE} ${ECR_REGISTRY}/${APP_NAME}:latest
+                        docker push ${ECR_REGISTRY}/${APP_NAME}:latest
                     """
                 }
-                echo "✅ Image pushed to ECR"
             }
         }
 
-        // ──────────────────────────────────────
-        // STAGE 7: Cleanup Images from Jenkins Server
-        // ──────────────────────────────────────
-        stage('7. Cleanup Images from Jenkins Server') {
+        stage('Stop Old Container') {
             steps {
-                sh """
-                    docker rmi ${ECR_REPO_NAME}:${IMAGE_TAG} || true
-                    docker rmi ${FULL_IMAGE}                  || true
-                    docker rmi ${LATEST_IMAGE}                || true
-                """
-                echo "✅ Local Docker images cleaned up"
+                sh 'docker rm -f backend || true'
+            }
+        }
+
+        stage('Run New Container') {
+            steps {
+                sh "docker run -d -p 5000:5000 --name backend ${FULL_IMAGE}"
+                sh 'docker ps'
             }
         }
     }
 
     post {
         success {
-            echo "✅ PIPELINE SUCCESS — ${FULL_IMAGE} pushed to ECR"
+            echo "✅ Pipeline SUCCESS — Build #${env.BUILD_NUMBER} pushed to ECR!"
         }
         failure {
-            echo "❌ PIPELINE FAILED — Check stage logs above"
+            echo "❌ Pipeline FAILED — Check the stage that turned red."
         }
     }
 }

@@ -22,7 +22,7 @@ pipeline {
             steps {
                 withSonarQubeEnv('SonarQube') {
                     sh """
-                        ${tool 'SonarScanner'}/bin/sonar-scanner \
+                        /var/lib/jenkins/tools/hudson.plugins.sonar.MsBuildSQRunnerInstallation/SonarQube/bin/sonar-scanner \
                           -Dsonar.projectKey=crm-backend-gatewayservice \
                           -Dsonar.projectName=crm-backend-gatewayservice \
                           -Dsonar.sources=. \

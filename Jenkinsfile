@@ -21,11 +21,13 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 withSonarQubeEnv('SonarQube') {
-                    sh "${tool 'SonarScanner'}/bin/sonar-scanner \
-                          -Dsonar.projectKey= crm-backend-gatewayservice'\
-                          -Dsonar.projectName='crm-backend-gatewayservice' \
-                          -Dsonar.sources=. \
-                          -Dsonar.exclusions=node_modules/**,**/*.test.js"
+                    sh '''
+                    ${tool 'SonarScanner'}/bin/sonar-scanner \
+                    -Dsonar.projectKey=crm-backend-gatewayservice \
+                    -Dsonar.projectName=crm-backend-gatewayservice \
+                    -Dsonar.sources=. \
+                    -Dsonar.exclusions=node_modules/**,**/*.test.js
+                    '''
                 }
             }
         }
@@ -53,8 +55,8 @@ pipeline {
                     sh """
                         aws ecr get-login-password --region ${AWS_REGION} \
                         | docker login \
-                            --username AWS \
-                            --password-stdin ${ECR_REGISTRY}
+                        --username AWS \
+                        --password-stdin ${ECR_REGISTRY}
 
                         docker push ${FULL_IMAGE}
 

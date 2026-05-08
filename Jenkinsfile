@@ -1,92 +1,93 @@
 pipeline {
     agent any
-
+ 
     environment {
-        APP_NAME       = 'crm-backend-gatewayservice'
-        AWS_REGION     = 'eu-north-1'
-        AWS_ACCOUNT_ID = '841162684034'
-        ECR_REGISTRY   = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-        IMAGE_TAG      = "${env.BUILD_NUMBER}"
-        FULL_IMAGE     = "${ECR_REGISTRY}/${APP_NAME}:${IMAGE_TAG}"
+        SCANNER_HOME = tool 'sonar-scanner'
+        IMAGE_NAME = "my-app"
+        IMAGE_TAG = "${BUILD_NUMBER}"
+        HARBOR_URL = "32.197.47.226"
+        PROJECT    = "library"
+ 
     }
-
+ 
     stages {
-
-        stage('Clone Backend Code') {
+ 
+        stage('Git checkout') {
             steps {
-                git branch: 'main', url: 'https://github.com/peakyblinder0509/crm-backend-gatewayservice.git'
+                git branch: 'main',
+                    credentialsId: 'git-cred',
+                    url: 'https://github.com/peakyblinder0509/microservice-project.git'
             }
         }
-
-        stage('SonarQube Analysis') {
+ 
+        stage('Sonar Scan') {
             steps {
-                withSonarQubeEnv('SonarQube') {
+                withSonarQubeEnv('sonar') {
                     sh """
-                        /var/lib/jenkins/tools/hudson.plugins.sonar.MsBuildSQRunnerInstallation/SonarQube/bin/sonar-scanner \
-                          -Dsonar.projectKey=crm-backend-gatewayservice \
-                          -Dsonar.projectName=crm-backend-gatewayservice \
-                          -Dsonar.sources=. \
-                          -Dsonar.exclusions=node_modules/**,**/*.test.js
+                    ${SCANNER_HOME}/bin/sonar-scanner \
+                    -Dsonar.projectKey=gatewayservice \
+                    -Dsonar.sources=.
                     """
                 }
             }
         }
-
+ 
         stage('Quality Gate') {
             steps {
-                timeout(time: 5, unit: 'MINUTES') {
+                timeout(time: 1, unit: 'MINUTES') {
                     waitForQualityGate abortPipeline: true
                 }
             }
         }
-
-        stage('Build Docker Image') {
+ 
+        stage('Image Build') {
             steps {
-                sh "docker build -t ${FULL_IMAGE} ."
-            }
-        }
-
-        stage('Push to AWS ECR') {
-            steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds'
-                ]]) {
-                    sh """
-                        aws ecr get-login-password --region ${AWS_REGION} \
-                        | docker login \
-                            --username AWS \
-                            --password-stdin ${ECR_REGISTRY}
-
-                        docker push ${FULL_IMAGE}
-
-                        docker tag ${FULL_IMAGE} ${ECR_REGISTRY}/${APP_NAME}:latest
-                        docker push ${ECR_REGISTRY}/${APP_NAME}:latest
-                    """
+                dir('gatewayservice') {
+                    sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ."
                 }
             }
         }
-
-        stage('Stop Old Container') {
+        stage('Tag Docker Image') {
             steps {
-                sh 'docker rm -f backend || true'
+                sh """
+                docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${HARBOR_URL}/${PROJECT}/${IMAGE_NAME}:${IMAGE_TAG}
+     
+                    """
+                   }
+                 }
+        stage('Docker Login Harbor') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'harbor-creds',
+                    usernameVariable: 'HARBOR_USER',
+                    passwordVariable: 'HARBOR_PASS'
+                )]) {
+ 
+                    sh '''
+                    docker login $HARBOR_URL \
+                    -u $HARBOR_USER \
+                    -p $HARBOR_PASS
+                    '''
+                }
             }
         }
-
-        stage('Run New Container') {
+ 
+        stage('Push To Harbor') {
             steps {
-                sh "docker run -d -p 5000:5000 --name backend ${FULL_IMAGE}"
-                sh 'docker ps'
+                sh 'docker push ${HARBOR_URL}/${PROJECT}/${IMAGE_NAME}:${IMAGE_TAG}'
             }
-        }
+        }     
     }
-
+ 
     post {
-        success {
-            echo "✅ Pipeline SUCCESS — Build #${env.BUILD_NUMBER} pushed to ECR!"
-        }
-        failure {
-            echo "❌ Pipeline FAILED — Check the stage that turned red."
+        always {
+            sh '''
+            echo "Removing only old images of my-app..."
+            docker images my-app --format "{{.Tag}}" | grep -v "${BUILD_NUMBER}" | while read tag; do
+                echo "Removing my-app:$tag"
+                docker rmi my-app:$tag || true
+            done
+            '''
         }
     }
 }
